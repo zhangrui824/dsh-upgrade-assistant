@@ -1,122 +1,136 @@
-# 升级助手（dsh-upgrade-assistant / Upgrade Assistant for DeepSeek Harness）
+# Upgrade Assistant (dsh-upgrade-assistant)
 
-**English**: A DeepSeek Harness (DSH) plugin that adds an **"Upgrades" tab** to the Plugins page —
-update checks against npm, DSH-compatibility preflight (`engines.dsh`), and one-click in-place
-upgrades that bypass pnpm's 24h release-cooling gate, with every failure explained in plain language.
-（中文说明见下。）
+**English** | [简体中文](./README.zh-CN.md)
 
-一个 DeepSeek Harness（DSH）插件：在插件页新增**「升级」标签页**，把所有插件的更新检查、
-兼容性预检和一键升级集中到一处，并把常见升级失败翻译成人话。
+A [DeepSeek Harness (DSH)](https://github.com/deepseek-ai/deepseek-harness) plugin that adds an
+**"Upgrades" tab** to the Plugins page: update checks for every installed plugin, DSH-compatibility
+preflight, and one-click in-place upgrades — with every failure explained in plain language.
 
-```
-PM ✓ · zh · 8 bundles · dsh 0.2.1-rc.5        ← 自诊断状态条
-┌ Harness (DSH) ── 当前版本 / npm 最新版 [检查 DSH 更新]
-├ 已安装插件 (N) ── [检查插件更新]
-│   上下文 (dsh-context)  0.77.0 → 0.78.1  [可升级]      engines.dsh: …
-│   Claude Code 子智能体  0.2.1-rc.2       [官方] [已是最新]
-│   dsh-web 0.4.7                          [非 npm 包，已跳过] [刷新内含依赖]
-├ 版本豁免 —— 当前有哪些"跳过 DSH 版本检查"的豁免
-└ 升级失败时怎么看 —— 四类常见失败的解读
-```
-
-## 安装
-
-从 GitHub 安装（推荐）：
+![Where to find the Upgrades tab](docs/upgrades-tab.png)
 
 ```
-dsh plugin --profile <你的profile> add github:zhangrui824/dsh-upgrade-assistant
+pm ✓ · en · 8 bundles · dsh 0.2.1-rc.5        ← self-diagnostics strip
+┌ Harness (DSH) ── Current version / Latest on npm [Check DSH updates]
+├ Installed plugins (N) ── [Check plugin updates]
+│   Context (dsh-context)  0.77.0 → 0.78.1  [Upgrade available]      engines.dsh: …
+│   Claude Code subagent   0.2.1-rc.2       [Official] [Up to date]
+│   dsh-web 0.4.7                           [Not on npm — skipped] [Refresh bundled family]
+├ Version exemptions — which "skip the DSH gate" permits are active
+└ When an upgrade fails — the four common failure classes, decoded
 ```
 
-或从本地克隆安装：
+## Install
+
+From GitHub (recommended):
+
+```
+dsh plugin --profile <your-profile> add github:zhangrui824/dsh-upgrade-assistant
+```
+
+Or from a local clone:
 
 ```
 git clone https://github.com/zhangrui824/dsh-upgrade-assistant.git
-dsh plugin --profile <你的profile> add file:/absolute/path/to/dsh-upgrade-assistant
+dsh plugin --profile <your-profile> add file:/absolute/path/to/dsh-upgrade-assistant
 ```
 
-或在会话里让智能体执行 `plugin_manager` 的 `install_bundle`，目标为本目录的绝对路径。
+## Usage
 
-## 使用
+1. Sidebar → **Plugins** → the **Upgrades** tab
+2. **Check plugin updates**: compares each installed bundle against npm (profile mirror aware,
+   5-minute cache, concurrency 3)
+3. Green **Upgrade available** → click **Upgrade** (inline confirm, then it runs);
+   yellow **Needs newer DSH** → upgrade DSH first — the button is hidden because the attempt
+   would certainly fail
+4. **Check DSH updates**: compares the running Harness against the newest npm release
 
-1. 打开左侧边栏 **插件** → 顶部 **升级** 标签
-2. **检查插件更新**：并发对比 npm 最新版（走 profile 配置的镜像源，5 分钟缓存）
-3. 绿色"可升级" → 点 **升级**（行内确认后执行）；黄色"等 DSH 版本" → 先升级 DSH
-4. **检查 DSH 更新**：对比 DSH 本体与 npm 最新版
+### How the updates actually work
 
-### 更新原理（重要）
+- **npm-installed plugins**: in-place `pnpm update --latest --config.minimumReleaseAge=0 <name>`.
+  The `minimumReleaseAge=0` override skips pnpm's 24-hour release-cooling gate (the classic
+  "version is too new to install" failure); this only happens on your explicit click.
+- **Transitive families** (npm dependencies pulled in by GitHub-sourced bundles such as the
+  dsh-web family): `pnpm update --latest` cannot move transitive dependencies — it silently
+  no-ops. The tab instead runs an in-range refresh
+  (`pnpm update <deps> --config.minimumReleaseAge=0`), moving each dependency to the newest
+  version its parent's semver range allows.
+- **Post-run verification**: the actually installed version is re-read from `node_modules`;
+  a green pnpm exit that moved nothing is reported as `stale`, never as success.
+- **Downgrade protection**: when npm's `latest` tag is behind the installed version (common for
+  the official `@deepseek-ai/*` packages), the update is refused.
 
-- **npm 直装的插件**：原地执行 `pnpm update --latest --config.minimumReleaseAge=0 <包名>`
-  ——`minimumReleaseAge=0` 会绕过 pnpm 的 24 小时发布冷却期（即"版本太近不让升级"的根源），
-  这是**用户主动点击**才触发的行为。
-- **传递依赖**（GitHub 来源 bundle 内含的 npm 依赖，如 dsh-web 拉入的 @linxin666 全家桶）：
-  `pnpm update --latest` 对传递依赖无效（静默空转），本插件使用**范围内刷新**
-  `pnpm update <依赖...> --config.minimumReleaseAge=0`（按父包声明的语义化范围移动）。
-- **升级后校验**：重读 `node_modules` 里的实际版本，pnpm 退出码为 0 但版本未动会明确报
-  "stale" 而不是谎报成功。
-- **防降级**：npm 的 `latest` 标签落后于已装版本时（官方 @deepseek-ai 包常见）直接拒绝更新。
+## Security model
 
-## 安全模型
+Custom web routes do not pass through the DSH web UI's cookie authentication, so all routes
+behind this plugin enforce their own trust fence (same tier as the community dsh-update):
 
-自定义 Web 路由不走 DSH 网页的 Cookie 认证，因此本插件的三条路由自带信任栅栏
-（与社区 dsh-update 同级的实现）：
+- loopback socket addresses only (127/8, ::1) **and** a loopback `Host` header
+- browser requests must be same-origin (`Origin` match, `sec-fetch-site ≠ cross-site`)
+- `X-Forwarded-For` is never trusted; rejections return `403 + JSON` with the reason
+- the update route additionally requires POST, a package-name allow-list regex (no injection,
+  no traversal), a 4 KB body cap, a **single-flight lock** (one pnpm operation at a time),
+  and a 10-minute timeout with hard process kill (taskkill on Windows, process group on Unix)
 
-- 仅接受**本机回环地址**的连接（127/8、::1），且 `Host` 头必须是回环主机名
-- 浏览器请求必须是**同源**（`Origin` 匹配 + `sec-fetch-site ≠ cross-site`）
-- `X-Forwarded-For` 一律不信任；被拒请求返回 `403 + JSON` 说明
-- 升级路由额外要求：POST、包名白名单正则（防注入/防穿越）、4KB 请求上限、
-  **单飞锁**（同时只允许一个 pnpm 操作）、10 分钟超时强杀（Windows taskkill / Unix 进程组）
+## Compatibility preflight
 
-## 兼容性预检
+When a new version declares `engines.dsh`, it is evaluated **before** upgrading with a semver
+range evaluator that matches DSH's own gate (`node-semver` semantics,
+`includePrerelease: true`; 34 cases verified against the original library). Unsatisfied bundles
+show "Needs newer DSH" and hide the upgrade button. Range syntaxes the evaluator cannot parse
+never block — the requirement is displayed verbatim and the real install remains the authority.
 
-每个可升级包的最新版如果声明了 `engines.dsh`，会在**升级前**用语义化范围求值器
-（与 DSH 官方同一套 node-semver 语义，`includePrerelease: true`，34 个用例对拍原库通过）
-判断当前 DSH 是否满足。不满足的包显示"等 DSH 版本"并隐藏升级按钮——避免必败的升级尝试。
-无法解析的范围语法**不会拦截**（显示要求原文，安装时由 DSH 官方校验兜底）。
+## FAQ
 
-## 常见问题
+**Clicking Upgrade says the update service is not live yet?**
+Host-side changes need one Harness restart (client-side changes apply on page refresh).
 
-**升级按钮点了报"升级服务尚未生效"？**
-Host 半端的代码修改需要重启 Harness 一次才生效（Client 端改动刷新页面即可）。
+**Why does a row say "Not on npm — skipped"?**
+That bundle was installed from GitHub or a local path — npm has no version to compare. For
+GitHub-sourced bundles the tab offers **Refresh bundled family** to move the npm dependencies
+the bundle pulls in (self-contained bundles with no dependencies get no such button).
 
-**为什么有的包显示"非 npm 包，已跳过"？**
-该包从 GitHub / 本地路径安装，npm 上没有可比对的版本。GitHub 来源的行会提供
-"刷新内含依赖"按钮，用于更新它拉入的 npm 全家桶。
+**What are "Version exemptions"?**
+Permits that skip the DSH compatibility gate for exact `package@version` pairs. Revoke them in
+the bundle's detail page after upgrading DSH.
 
-**"版本豁免"是什么？**
-跳过 DSH 版本兼容检查的许可记录。升级 DSH 后可在对应插件详情页撤销。
+**Relation to the dsh-update plugin?**
+dsh-update refreshes its author's family (`@linxin666/*`) and shows release notes; this plugin
+covers the global npm-bundle view. Their update commands differ for transitive dependencies
+(`--latest` only touches direct dependencies) — this plugin handles both modes explicitly.
 
-**和 dsh-update 插件什么关系？**
-dsh-update 按作者家族（@linxin666/*）更新全家桶；本插件覆盖 npm 直装 bundle 的全局检查与升级。
-两者的更新命令在传递依赖场景有差异（`--latest` 只作用于直接依赖），本插件已按两种模式区分处理。
-
-## 开发与测试
+## Development & testing
 
 ```
-npm test        # 运行测试（版本比较 / 范围求值 / 信任栅栏 / 包名校验 / 防降级）
-node --check index.js && node --check client.js   # 语法检查
+npm test        # version compare / range evaluation / trust fence / name gates / downgrade guard
+node --check index.js && node --check client.js
 ```
 
-测试通过源码切片加载纯函数执行（与插件运行的是同一段代码）。Host 半端修改需重启
-Harness 生效；Client 半端修改刷新页面即可。
+Tests load the pure functions from the shipped sources verbatim and run them standalone —
+the same code paths the plugin executes. Host-side changes need one Harness restart;
+client-side changes apply on page refresh.
 
-### 文件结构
+### Repository layout
 
 ```
-├── index.js          # Host 半端：3 条路由 + 版本检测 + 信任栅栏 + pnpm 更新执行器
-├── client.js         # Client 半端：plugins.tab 的"升级"标签页
-├── cordis.patch.yml  # Loader 行声明
-├── locale/           # 插件元数据（Plugin Manager 列表展示）
+├── index.js          # Host half: routes (host-info / latest / family / update) + fence + pnpm runner
+├── client.js         # Client half: the Upgrades tab
+├── cordis.patch.yml  # Loader row
+├── locale/           # display metadata for the Plugin Manager
+├── docs/             # screenshots
 ├── test/run-tests.mjs
-└── STATUS.md         # 详细开发记录与踩坑笔记（排障先看它）
+└── CHANGELOG.md
 ```
 
-## 已知边界
+## Known limits
 
-- DSH 版本检测依赖 `DSH_CLIENT_VERSION` 环境变量或入口脚本向上查找 `@deepseek-ai/dsh` 清单，
-  两者都不可用时显示"未知"（不影响其他功能）。
-- registry 默认 npmjs，优先使用 profile 配置的 `resolved` 源；私有源需要认证时查询会失败并显示原因。
-- 本插件自身从本地路径安装时无法自更新（发布到 npm 后可用它自己的"升级"按钮自升级）。
+- The running DSH version is detected from `DSH_CLIENT_VERSION` or by walking up from the
+  entry script to the `@deepseek-ai/dsh` manifest; when neither answers, the version shows as
+  unknown (everything else keeps working).
+- The registry defaults to npmjs and prefers the profile's configured mirror; private registries
+  that require auth will fail with the reason shown.
+- While installed from a local path, the plugin cannot update itself (publish to npm and it can
+  use its own Upgrade button — dogfooding).
 
 ## License
 
-MIT
+[MIT](./LICENSE)
