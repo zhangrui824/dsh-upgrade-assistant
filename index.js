@@ -28,6 +28,7 @@ import path from 'node:path';
 const ROUTE_HOST_INFO = '/upgrade-assistant/host-info';
 const ROUTE_LATEST = '/upgrade-assistant/latest';
 const ROUTE_UPDATE = '/upgrade-assistant/update';
+const ROUTE_FAMILY = '/upgrade-assistant/family';
 
 const LOOPBACK_ADDRESSES = new Set(['127.0.0.1', '::1', '::ffff:127.0.0.1', 'localhost']);
 const REGISTRY_CACHE_TTL_MS = 5 * 60 * 1000;
@@ -563,6 +564,34 @@ function handleLatest(req, res) {
   }
 }
 
+/**
+ * GET /family?name=<bundle> — the registry dependencies one installed bundle
+ * declares (possibly empty: self-contained packages like dsh-popout-sidebar
+ * have none, and the tab must not offer a family refresh for them).
+ */
+function handleFamily(ctx) {
+  return (req, res) => {
+    if (!guard(req, res)) return;
+    try {
+      const url = new URL(req.url ?? '/', 'http://dsh.invalid');
+      const name = url.searchParams.get('name') ?? '';
+      if (!PACKAGE_NAME_PATTERN.test(name) || !SHELL_SAFE_PACKAGE_RE.test(name)) {
+        sendJson(res, { ok: false, error: 'invalid package name' });
+        return;
+      }
+      const profileDir = ctx.get('profileContext')?.dir;
+      if (typeof profileDir !== 'string' || profileDir === '') {
+        sendJson(res, { ok: false, error: 'profile directory unknown' });
+        return;
+      }
+      const deps = npmDependenciesOf(profileDir, name);
+      sendJson(res, { ok: true, name, deps, count: deps.length });
+    } catch (error) {
+      sendJson(res, { ok: false, error: String(error?.message ?? error).slice(0, 200) });
+    }
+  };
+}
+
 export function apply(ctx) {
   // The webServer service may activate after this row (it does after a
   // restart), so register through the injector instead of reading it once.
@@ -576,6 +605,7 @@ export function apply(ctx) {
       const routes = [
         webServer.register({ kind: 'exact', path: ROUTE_HOST_INFO, handler: handleHostInfo }),
         webServer.register({ kind: 'exact', path: ROUTE_LATEST, handler: handleLatest }),
+        webServer.register({ kind: 'exact', path: ROUTE_FAMILY, handler: handleFamily(ctx) }),
         webServer.register({ kind: 'exact', path: ROUTE_UPDATE, handler: handleUpdate(ctx) }),
       ];
       return () => {

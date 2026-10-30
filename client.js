@@ -18,6 +18,7 @@ window.__ModuleLoader__.load({
     const ROUTE_HOST_INFO = '/upgrade-assistant/host-info';
     const ROUTE_LATEST = '/upgrade-assistant/latest';
     const ROUTE_UPDATE = '/upgrade-assistant/update';
+    const ROUTE_FAMILY = '/upgrade-assistant/family';
     const CHECK_CONCURRENCY = 3;
     const REFRESH_DELAYS_MS = [10000, 25000, 45000];
     const DEFAULT_REGISTRY = 'https://registry.npmjs.org';
@@ -58,6 +59,7 @@ window.__ModuleLoader__.load({
         errNoNewer: 'No newer version to install.',
         errNotFound: 'The package was not found on npm.',
         errPnpmMissing: 'pnpm was not found (tried pnpm, corepack, npx).',
+        errNoFamily: 'This bundle declares no npm dependencies — nothing to refresh.',
         errForbidden: 'Refused: only same-origin requests from this machine may update.',
         errNeedRestart: 'The update service is not live yet — restart the Harness once, then retry.',
         unknown: 'Unknown',
@@ -115,6 +117,7 @@ window.__ModuleLoader__.load({
         errNoNewer: '没有更新的版本可安装。',
         errNotFound: 'npm 上找不到该包。',
         errPnpmMissing: '未找到 pnpm（已尝试 pnpm / corepack / npx）。',
+        errNoFamily: '该包没有声明任何 npm 内含依赖，无需刷新。',
         errForbidden: '已拒绝：仅允许本机同源请求执行升级。',
         errNeedRestart: '升级服务尚未生效——请重启一次 Harness 后重试。',
         unknown: '未知',
@@ -575,10 +578,23 @@ window.__ModuleLoader__.load({
       }, []);
 
       const NON_NPM_SOURCE = /^(?:[a-z][a-z0-9+.-]*:|git\+|git@|\/|\\\\)/i;
+      const GITHUB_SOURCE = /^(github:|git\+|git@|https?:\/\/github)/i;
 
       const isNonNpmSource = React.useCallback((bundle) => {
         const source = bundle?.source;
         return typeof source === 'string' && source !== '' && NON_NPM_SOURCE.test(source);
+      }, []);
+
+      const isGithubSource = React.useCallback((bundle) => {
+        const source = bundle?.source;
+        return typeof source === 'string' && source !== '' && GITHUB_SOURCE.test(source);
+      }, []);
+
+      /** How many registry dependencies the installed bundle declares (0 for self-contained ones). */
+      const fetchFamilyCount = React.useCallback(async (name) => {
+        const response = await fetch(`${ROUTE_FAMILY}?name=${encodeURIComponent(name)}`, { headers: { accept: 'application/json' } });
+        const data = await response.json().catch(() => null);
+        return data && data.ok === true && Array.isArray(data.deps) ? data.deps.length : 0;
       }, []);
 
       const fetchLatest = React.useCallback(async (name) => {
@@ -598,6 +614,15 @@ window.__ModuleLoader__.load({
       const checkOne = React.useCallback(async (name, bundle) => {
         if (isNonNpmSource(bundle)) {
           setChecks((prev) => ({ ...prev, [name]: { kind: 'refused', problem: 'not-found' } }));
+          if (isGithubSource(bundle) && name !== 'dsh-upgrade-assistant') {
+            // Only offer the family refresh to bundles that actually declare
+            // registry dependencies — self-contained ones (empty deps) have
+            // nothing to refresh and must not grow a dead button.
+            const familyCount = await fetchFamilyCount(name);
+            if (familyCount > 0) {
+              setChecks((prev) => ({ ...prev, [name]: { kind: 'refused', problem: 'not-found', familyCount } }));
+            }
+          }
           return;
         }
         setChecks((prev) => ({ ...prev, [name]: { kind: 'checking' } }));
@@ -611,7 +636,7 @@ window.__ModuleLoader__.load({
         } catch (error) {
           setChecks((prev) => ({ ...prev, [name]: { kind: 'error', message: String(error?.message ?? error) } }));
         }
-      }, [fetchLatest, isNonNpmSource]);
+      }, [fetchFamilyCount, fetchLatest, isGithubSource, isNonNpmSource]);
 
       const checkAll = React.useCallback(async () => {
         if (!api?.pm || checkingAll || !bundles?.length) return;
@@ -700,7 +725,9 @@ window.__ModuleLoader__.load({
               cls: 'idle',
               text: t('notOnNpm'),
               reason: isGithub ? t('skipHintGithub') : null,
-              familyRefreshable: isGithub && bundle.name !== 'dsh-upgrade-assistant',
+              // The button only appears once the /family probe confirmed the
+              // bundle actually declares registry dependencies (check.familyCount).
+              familyRefreshable: isGithub && bundle.name !== 'dsh-upgrade-assistant' && check.familyCount > 0,
             };
           }
           return { cls: 'warn', text: t('checkFailed'), reason: check.reason ?? check.problem };
@@ -721,6 +748,7 @@ window.__ModuleLoader__.load({
           case 'no-newer': return t('errNoNewer');
           case 'not-found': return t('errNotFound');
           case 'pnpm-missing': return t('errPnpmMissing');
+          case 'no-family': return t('errNoFamily');
           default: return data?.error ?? `HTTP ${status}`;
         }
       }, [t]);
