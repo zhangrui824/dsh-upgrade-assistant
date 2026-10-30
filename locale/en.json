@@ -1,0 +1,6 @@
+{
+  "meta": {
+    "title": "Upgrade Assistant",
+    "description": "Adds an Upgrades tab to the Plugins page: check plugin updates, start upgrades in one place, and explains DSH version blockers."
+  }
+}
